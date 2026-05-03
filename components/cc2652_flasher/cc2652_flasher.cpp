@@ -20,6 +20,7 @@
 #ifdef USE_ESP_IDF
   #include "esp_http_client.h"
   #include "esp_crt_bundle.h"
+  #include "lwip/sockets.h"
 #else
   #error "This component is ESP-IDF only."
 #endif
@@ -196,6 +197,63 @@ class CC2652Flasher : public Component {
       return false;
     }
     return true;
+  }
+
+  // Probe internet reachability via a non-blocking TCP connect to 1.1.1.1:53.
+  //
+  // Why not rely on esp_http_client with a short timeout_ms?
+  //   cfg.timeout_ms sets SO_RCVTIMEO/SO_SNDTIMEO (data transfer timeouts),
+  //   NOT the initial TLS handshake. esp_tls_conn_new_sync() can block through
+  //   TCP SYN retransmits for >>5 s even when timeout_ms=4000, overrunning the
+  //   WDT before the HTTP layer ever gets a chance to time out.
+  //
+  // This probe uses a raw TCP socket with select() polled in 50 ms slices so
+  // the WDT is fed throughout and the call is strictly bounded to timeout_ms.
+  // If the probe fails all HTTP operations are skipped.
+  bool internet_reachable_(uint32_t timeout_ms = 1500) {
+    feed_();
+    int sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) {
+      ESP_LOGW(TAG, "internet check: socket() failed (%d)", errno);
+      return false;
+    }
+
+    // Non-blocking so connect() returns EINPROGRESS immediately instead of
+    // blocking for the OS TCP retransmit timeout.
+    int flags = ::fcntl(sock, F_GETFL, 0);
+    ::fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+    struct sockaddr_in addr = {};
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons(53);
+    addr.sin_addr.s_addr = inet_addr("1.1.1.1");  // Cloudflare DNS: reliable, no TLS
+
+    ::connect(sock, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr));
+    // EINPROGRESS is expected; poll with select() below.
+
+    bool reachable    = false;
+    uint32_t deadline = millis() + timeout_ms;
+    while (millis() < deadline) {
+      uint32_t remaining = deadline - millis();
+      uint32_t slice_ms  = std::min(remaining, (uint32_t)50);
+      struct timeval tv  = {0, (long)(slice_ms * 1000)};
+      fd_set wfds;
+      FD_ZERO(&wfds);
+      FD_SET(sock, &wfds);
+      int sel = ::select(sock + 1, nullptr, &wfds, nullptr, &tv);
+      feed_();  // feed WDT on every 50 ms slice
+      if (sel > 0) {
+        int err = 0; socklen_t elen = sizeof(err);
+        ::getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &elen);
+        reachable = (err == 0);
+        break;
+      }
+      if (sel < 0) break;  // select error, treat as unreachable
+    }
+    ::close(sock);
+    feed_();
+    ESP_LOGD(TAG, "internet_reachable_: %s (budget=%ums)", reachable ? "YES" : "NO", (unsigned)timeout_ms);
+    return reachable;
   }
 
  bool fetch_manifest_(const std::string &url, std::string &fw_url_out){
@@ -1128,6 +1186,13 @@ class CC2652Flasher : public Component {
       (void)detect_variant_via_bsl_();
     }
 
+    feed_();
+    if (!internet_reachable_()) {
+      ESP_LOGE(TAG, "No internet access — firmware update requires network. Aborting.");
+      return;
+    }
+    feed_();
+
     std::string fw_url;
     if(!fetch_manifest_(manifest_url_, fw_url)){
       ESP_LOGE(TAG,"Manifest fetch/parse failed.");
@@ -1191,12 +1256,14 @@ class CC2652Flasher : public Component {
 
   void run_check_update_(){
     ESP_LOGI(TAG, "Checking CC2652 firmware against manifest…");
-    // Detect variant for manifest selection
+    // Detect variant for manifest selection (serial — no internet needed)
+    feed_();
     probe_znp_product_();
     if (choose_variant_() == 0) {
       ESP_LOGD(TAG, "Variant still unknown (not entering bootloader during check).");
     }
-    // Query current code revision via SYS_VERSION
+    feed_();
+    // Query current code revision via ZNP SYS_VERSION (serial — no internet needed)
     uint32_t code_rev = 0;
     {
       std::vector<uint8_t> pl;
@@ -1208,6 +1275,14 @@ class CC2652Flasher : public Component {
         ESP_LOGW(TAG, "Could not read current code revision from ZNP");
       }
     }
+    // Gate all HTTP activity behind a fast internet probe so we never block
+    // long enough for the WDT to fire when the device has no internet access.
+    feed_();
+    if (!internet_reachable_()) {
+      ESP_LOGW(TAG, "No internet -- skipping manifest check. Will retry at next scheduled interval.");
+      return;
+    }
+    feed_();
     std::string fw_url;
     bool man_ok = fetch_manifest_(manifest_url_, fw_url);
     if (!manifest_version_.empty() && latest_text_) latest_text_->publish_state(manifest_version_.c_str());

@@ -21,6 +21,7 @@
   #include "esp_http_client.h"
   #include "esp_crt_bundle.h"
   #include "lwip/sockets.h"
+  #include "esp_task_wdt.h"
 #else
   #error "This component is ESP-IDF only."
 #endif
@@ -128,7 +129,12 @@ class CC2652Flasher : public Component {
   static inline void put_u32_le_(std::vector<uint8_t>&v,uint32_t x){ v.push_back(x&0xFF); v.push_back((x>>8)&0xFF); v.push_back((x>>16)&0xFF); v.push_back((x>>24)&0xFF); }
   static inline void put_u32_be_(std::vector<uint8_t>&v,uint32_t x){ v.push_back((x>>24)&0xFF); v.push_back((x>>16)&0xFF); v.push_back((x>>8)&0xFF); v.push_back(x&0xFF); }
 
-  inline void feed_(){ esphome::App.feed_wdt(); }
+  inline void feed_(){
+    // esp_task_wdt_reset() logs E-level "task not found" when the calling task is
+    // not subscribed to the task WDT (the default in ESPHome 2026+/ESP-IDF 5.x).
+    // Guard the call so we only reset when the task is actually being watched.
+    if (esp_task_wdt_status(NULL) == ESP_OK) esphome::App.feed_wdt();
+  }
   void delay_(uint32_t ms){
     uint32_t start = millis();
     while (millis() - start < ms) { esphome::App.feed_wdt(); esphome::delay(1); }
@@ -199,7 +205,7 @@ class CC2652Flasher : public Component {
     return true;
   }
 
-  // Probe internet reachability via a non-blocking TCP connect to 1.1.1.1:53.
+  // Probe internet reachability via a non-blocking TCP connect to 1.1.1.1:443.
   //
   // Why not rely on esp_http_client with a short timeout_ms?
   //   cfg.timeout_ms sets SO_RCVTIMEO/SO_SNDTIMEO (data transfer timeouts),
@@ -225,8 +231,8 @@ class CC2652Flasher : public Component {
 
     struct sockaddr_in addr = {};
     addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(53);
-    addr.sin_addr.s_addr = inet_addr("1.1.1.1");  // Cloudflare DNS: reliable, no TLS
+    addr.sin_port        = htons(443);
+    addr.sin_addr.s_addr = inet_addr("1.1.1.1");  // Cloudflare; port 443 avoids router DNS proxy interception
 
     ::connect(sock, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr));
     // EINPROGRESS is expected; poll with select() below.

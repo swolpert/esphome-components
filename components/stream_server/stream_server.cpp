@@ -199,6 +199,8 @@ void StreamServerComponent::flush() {
             // Expected if the (TCP) transmit buffer is full, nothing to do.
         } else {
             ESP_LOGE(TAG, "Failed to write to client %s with error %d!", client.identifier.c_str(), errno);
+            client.disconnected = true;
+            continue;
         }
 
         this->buf_tail_ = std::min(this->buf_tail_, client.position);
@@ -232,6 +234,7 @@ void StreamServerComponent::write() {
             // Expected if the (TCP) receive buffer is empty, nothing to do.
         } else {
             ESP_LOGW(TAG, "Failed to read from client %s with error %d!", client.identifier.c_str(), errno);
+            client.disconnected = true;
         }
     }
 }

@@ -137,7 +137,7 @@ class CC2652Flasher : public Component {
   }
   void delay_(uint32_t ms){
     uint32_t start = millis();
-    while (millis() - start < ms) { esphome::App.feed_wdt(); esphome::delay(1); }
+    while (millis() - start < ms) { feed_(); esphome::delay(1); }
   }
 
   void log_bytes_(const char* prefix, const uint8_t* data, size_t len) {
@@ -1000,9 +1000,8 @@ class CC2652Flasher : public Component {
       znp_product_ = pl[1];
       ESP_LOGD(TAG, "Detected ZNP product=%u for variant selection", (unsigned)znp_product_);
       if (variant_text_) {
-        const char* vs = nullptr;
-        if (variant_detected_==7) vs="CC2652P7"; else if (variant_detected_==2) vs="CC2652P2";
-        else if (znp_product_==7) vs="CC2652P7"; else if (znp_product_==2) vs="CC2652P2";
+        uint8_t v = choose_variant_();
+        const char* vs = (v == 2) ? "CC2652P2" : (v == 7) ? "CC2652P7" : nullptr;
         if (vs) variant_text_->publish_state(vs); else ESP_LOGD(TAG, "Variant still unknown; keeping previous value");
       }
       if (znp_product_ != 2 && znp_product_ != 7 && choose_variant_() == 0) {
@@ -1028,9 +1027,8 @@ class CC2652Flasher : public Component {
       // SYS_VERSION payload: [0]=transport,[1]=product,[2]=major,[3]=minor,[4]=maint,[5..8]=CODE_REVISION_NUMBER (LSB first)
       znp_product_ = pl[1];
       if (variant_text_) {
-        const char* vs = nullptr;
-        if (variant_detected_==7) vs="CC2652P7"; else if (variant_detected_==2) vs="CC2652P2";
-        else if (znp_product_==7) vs="CC2652P7"; else if (znp_product_==2) vs="CC2652P2";
+        uint8_t v = choose_variant_();
+        const char* vs = (v == 2) ? "CC2652P2" : (v == 7) ? "CC2652P7" : nullptr;
         if (vs) variant_text_->publish_state(vs); else ESP_LOGD(TAG, "Variant still unknown; keeping previous value");
       }
       if (znp_product_ != 2 && znp_product_ != 7 && choose_variant_() == 0) {

@@ -82,7 +82,7 @@ class CC2652Flasher : public Component {
 
   void setup() override {
     // Optionally detect variant very early at boot
-    if (detect_on_boot_) {
+    if (detect_on_boot_ && choose_variant_() == 0) {
       if (detect_on_boot_delay_ms_ == 0) {
         this->run_detect_variant_();
       } else {
@@ -999,7 +999,7 @@ class CC2652Flasher : public Component {
         else if (znp_product_==7) vs="CC2652P7"; else if (znp_product_==2) vs="CC2652P2";
         if (vs) variant_text_->publish_state(vs); else ESP_LOGD(TAG, "Variant still unknown; keeping previous value");
       }
-      if (znp_product_ != 2 && znp_product_ != 7) {
+      if (znp_product_ != 2 && znp_product_ != 7 && choose_variant_() == 0) {
         ESP_LOGW(TAG, "SYS_VERSION product=%u does not distinguish P2/P7; variant remains unknown until flashing or manual override.", (unsigned)znp_product_);
       }
     }
@@ -1027,7 +1027,7 @@ class CC2652Flasher : public Component {
         else if (znp_product_==7) vs="CC2652P7"; else if (znp_product_==2) vs="CC2652P2";
         if (vs) variant_text_->publish_state(vs); else ESP_LOGD(TAG, "Variant still unknown; keeping previous value");
       }
-      if (znp_product_ != 2 && znp_product_ != 7) {
+      if (znp_product_ != 2 && znp_product_ != 7 && choose_variant_() == 0) {
         ESP_LOGW(TAG, "Variant detection via SYS_VERSION: unknown (product=%u). Set 'variant' in YAML if needed.", (unsigned)znp_product_);
       }
       uint32_t code_rev = (uint32_t)pl[5] | ((uint32_t)pl[6] << 8) | ((uint32_t)pl[7] << 16) | ((uint32_t)pl[8] << 24);
@@ -1300,6 +1300,12 @@ class CC2652Flasher : public Component {
   }
 
   void run_detect_variant_(){
+    if (choose_variant_() != 0) {
+      uint8_t v = choose_variant_();
+      ESP_LOGI(TAG, "Variant already known: %s — skipping bootloader detection", v == 2 ? "CC2652P2" : "CC2652P7");
+      if (variant_text_) variant_text_->publish_state(v == 2 ? "CC2652P2" : "CC2652P7");
+      return;
+    }
     ESP_LOGI(TAG, "Detecting CC2652 variant via ROM bootloader…");
     // Make sure we have basic config
     if (!uart_ || !bsl_sw_ || !rst_sw_) { ESP_LOGE(TAG, "Not configured (uart/switches)."); return; }

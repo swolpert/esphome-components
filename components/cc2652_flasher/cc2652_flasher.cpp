@@ -21,7 +21,6 @@
   #include "esp_http_client.h"
   #include "esp_crt_bundle.h"
   #include "lwip/sockets.h"
-  #include "esp_task_wdt.h"
 #else
   #error "This component is ESP-IDF only."
 #endif
@@ -130,10 +129,10 @@ class CC2652Flasher : public Component {
   static inline void put_u32_be_(std::vector<uint8_t>&v,uint32_t x){ v.push_back((x>>24)&0xFF); v.push_back((x>>16)&0xFF); v.push_back((x>>8)&0xFF); v.push_back(x&0xFF); }
 
   inline void feed_(){
-    // esp_task_wdt_reset() logs E-level "task not found" when the calling task is
-    // not subscribed to the task WDT (the default in ESPHome 2026+/ESP-IDF 5.x).
-    // Guard the call so we only reset when the task is actually being watched.
-    if (esp_task_wdt_status(NULL) == ESP_OK) esphome::App.feed_wdt();
+    // ESPHome 2026+/ESP-IDF 5.x manages the task WDT independently; calling
+    // esp_task_wdt_reset() from here produces "task not found" log noise when
+    // the main loop task is not subscribed. The original boot-loop risk is
+    // eliminated by the internet_reachable_() probe, so no manual feeds needed.
   }
   void delay_(uint32_t ms){
     uint32_t start = millis();
